@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitHub Repository Search</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: #f6f8fa;
+      color: #24292f;
+      min-height: 100vh;
+    }
+    .container { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+    h1 { font-size: 28px; margin-bottom: 4px; }
+    p.sub { color: #57606a; margin-bottom: 24px; }
+
+    .search-box {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      font-size: 16px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,.2); }
+
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: 600;
+      color: #fff;
+      background: #2da44e;
+      border: 1px solid rgba(27,31,36,.15);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:hover { background: #2c974b; }
+    button:disabled { background: #94d3a2; cursor: not-allowed; }
+
+    #status { color: #57606a; font-size: 14px; margin-bottom: 16px; min-height: 20px; }
+
+    .repo-card {
+      background: #fff;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+    }
+    .repo-card h3 { margin-bottom: 6px; }
+    .repo-card h3 a { color: #0969da; text-decoration: none; }
+    .repo-card h3 a:hover { text-decoration: underline; }
+    .repo-card p.desc { color: #57606a; margin-bottom: 10px; font-size: 14px; }
+    .meta { display: flex; gap: 16px; font-size: 13px; color: #57606a; flex-wrap: wrap; }
+    .meta span { display: inline-flex; align-items: center; gap: 4px; }
+    .lang-dot { width: 12px; height: 12px; border-radius: 50%; background: #f1e05a; display: inline-block; }
+
+    #pagination { display: flex; gap: 8px; justify-content: center; margin-top: 20px; }
+    #pagination button {
+      background: #fff;
+      color: #0969da;
+      border: 1px solid #d0d7de;
+    }
+    #pagination button:disabled { color: #959da5; cursor: not-allowed; background: #f6f8fa; }
+    #pagination span { align-self: center; font-size: 14px; color: #57606a; }
+
+    .error { color: #cf222e; background: #ffebe9; border: 1px solid #ffcecb; border-radius: 6px; padding: 12px 16px; margin-bottom: 16px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔍 GitHub Repository Search</h1>
+    <p class="sub">Search public repositories on GitHub by keyword</p>
+
+    <form class="search-box" id="searchForm">
+      <input type="text" id="query" placeholder="e.g., tetris, machine-learning, docker"
+             aria-label="Search keyword" autocomplete="off">
+      <select id="sort" title="Sort results">
+        <option value="best">Best match</option>
+        <option value="stars">Most stars</option>
+        <option value="forks">Most forks</option>
+        <option value="updated">Recently updated</option>
+      </select>
+      <button type="submit" id="submitBtn">Search</button>
+    </form>
+
+    <div id="status"></div>
+    <div id="error" class="error hidden"></div>
+    <div id="results"></div>
+    <div id="pagination"></div>
+  </div>
+
+  <script>
+    let currentPage = 1;
+    let currentQuery = '';
+    let currentSort = 'best';
+    let totalCount = 0;
+
+    const resultsEl = document.getElementById('results');
+    const statusEl = document.getElementById('status');
+    const errorEl = document.getElementById('error');
+    const paginationEl = document.getElementById('pagination');
+    const form = document.getElementById('searchForm');
+    const queryInput = document.getElementById('query');
+    const sortSelect = document.getElementById('sort');
+    const submitBtn = document.getElementById('submitBtn');
+
+    // Optional: add your GitHub token here to get higher rate limits.
+    // Create one at https://github.com/settings/tokens
+    const TOKEN = ''; // e.g. 'ghp_xxxxxxxxxxxx'
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const q = queryInput.value.trim();
+      if (!q) return;
+      currentQuery = q;
+      currentSort = sortSelect.value;
+      currentPage = 1;
+      await search();
+    });
+
+    async function search() {
+      errorEl.classList.add('hidden');
+      resultsEl.innerHTML = '';
+      paginationEl.innerHTML = '';
+      submitBtn.disabled = true;
+      statusEl.textContent = 'Searching...';
+
+      const url = new URL('https://api.github.com/search/repositories');
+      url.searchParams.set('q', currentQuery);
+      if (currentSort !== 'best') url.searchParams.set('sort', currentSort);
+      url.searchParams.set('order', 'desc');
+      url.searchParams.set('per_page', '10');
+      url.searchParams.set('page', currentPage.toString());
+
+      const headers = { 'Accept': 'application/vnd.github+json' };
+      if (TOKEN) headers['Authorization'] = `Bearer ${TOKEN}`;
+
+      try {
+        const res = await fetch(url, { headers });
+
+        if (res.status === 403) {
+          const limit = res.headers.get('X-RateLimit-Remaining');
+          showError('Rate limit exceeded. ' +
+            (limit === '0' ? 'Try again in about a minute, or add a GitHub token.' : ''));
+          return;
+        }
+        if (res.status === 422) {
+          showError('Invalid search query. Please refine your keywords.');
+          return;
+        }
+        if (!res.ok) {
+          showError(`Request failed (HTTP ${res.status}).`);
+          return;
+        }
+
+        const data = await res.json();
+        totalCount = data.total_count;
+        renderResults(data.items);
+        renderPagination();
+      } catch (err) {
+        showError('Network error: ' + err.message);
+      } finally {
+        submitBtn.disabled = false;
+        statusEl.textContent = '';
+      }
+    }
+
+    function renderResults(items) {
+      statusEl.textContent = `${totalCount.toLocaleString()} repositories found` +
+        (items.length ? ` (showing page ${currentPage})` : '');
+
+      if (!items.length) {
+        resultsEl.innerHTML = '<p style="color:#57606a">No repositories found.</p>';
+        return;
+      }
+
+      const cards = items.map(repo => {
+        const lang = repo.language
+          ? `<span><span class="lang-dot"></span>${escapeHtml(repo.language)}</span>`
+          : '';
+        const desc = repo.description ? `<p class="desc">${escapeHtml(repo.description)}</p>` : '';
+
+        return `
+          <div class="repo-card">
+            <h3><a href="${repo.html_url}" target="_blank" rel="noopener">${escapeHtml(repo.full_name)}</a></h3>
+            ${desc}
+            <div class="meta">
+              <span>⭐ ${repo.stargazers_count.toLocaleString()}</span>
+              <span>⑂ ${repo.forks_count.toLocaleString()}</span>
+              <span>👁 ${repo.watchers_count.toLocaleString()}</span>
+              ${lang}
+              <span>${escapeHtml(repo.language ? 'Language' : '')}</span>
+            </div>
+          </div>`;
+      }).join('');
+
+      resultsEl.innerHTML = cards;
+    }
+
+    function renderPagination() {
+      const totalPages = Math.ceil(totalCount / 10);
+      if (totalPages <= 1) return;
+
+      paginationEl.innerHTML = `
+        <button ${currentPage === 1 ? 'disabled' : ''} id="prevBtn">← Prev</button>
+        <span>Page ${currentPage} of ${Math.min(totalPages, 100)}</span>
+        <button ${currentPage >= Math.min(totalPages, 100) ? 'disabled' : ''} id="nextBtn">Next →</button>
+      `;
+
+      document.getElementById('prevBtn').addEventListener('click', () => {
+        currentPage--;
+        search();
+      });
+      document.getElementById('nextBtn').addEventListener('click', () => {
+        currentPage++;
+        search();
+      });
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('hidden');
+      statusEl.textContent = '';
+      resultsEl.innerHTML = '';
+      paginationEl.innerHTML = '';
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      const div = document.createElement('div');
+      div.textContent = String(str);
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>
